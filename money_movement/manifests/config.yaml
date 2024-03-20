@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: money-movement-configmap
+data:
+  PLACEHOLDER: "NONE"
+  

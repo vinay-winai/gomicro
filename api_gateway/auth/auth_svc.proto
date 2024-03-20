@@ -1,0 +1,19 @@
+syntax = "proto3";
+option go_package = "github.com/vinay-winai/gomicro/auth/proto/pb";
+
+service Authservice{
+    rpc GetToken(Credentials) returns (Token) {}
+    rpc ValidateToken(Token) returns (User) {}
+}
+
+message Token{
+    string jwt = 1;
+}
+message Credentials {
+    string userName = 1;
+    string password = 2;
+}
+
+message User {
+    string userId = 1;
+}
