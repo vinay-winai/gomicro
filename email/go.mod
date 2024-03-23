@@ -2,7 +2,10 @@ module github.com/vinay-winai/gomicro
 
 go 1.22.0
 
-require github.com/IBM/sarama v1.43.0
+require (
+	github.com/IBM/sarama v1.43.0
+	github.com/hashicorp/golang-lru/v2 v2.0.7
+)
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect

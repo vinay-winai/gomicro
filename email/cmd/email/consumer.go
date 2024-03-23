@@ -8,6 +8,8 @@ import (
 	"os"
 	"github.com/IBM/sarama"
 	"github.com/vinay-winai/gomicro/internal/email"
+	"github.com/hashicorp/golang-lru/v2/expirable"
+	"time"
 )
 
 const topic = "email"
@@ -19,6 +21,9 @@ type EmailMsg struct {
 	UserID  string `json:"user_id"`
 }
 
+type empty struct {}
+
+var cache = expirable.NewLRU[string,empty](1000, nil, time.Millisecond*1000)
 
 func main() {
 	sarama.Logger = log.New(os.Stdout, "[sarama]", log.LstdFlags)
@@ -78,9 +83,18 @@ func handleMessage(msg *sarama.ConsumerMessage) {
 		fmt.Println("Error unmarshalling message:", err)
 		return
 	}
-	err = email.Send(emailMsg.UserID, emailMsg.OrderID)
-	if err != nil {
-		fmt.Println("Error sending email:", err)
+	// once
+	if _, ok := cache.Get(emailMsg.OrderID); !ok {
+		log.Printf("Sending email with Order-id:%s", emailMsg.OrderID)
+		err = email.Send(emailMsg.UserID, emailMsg.OrderID)
+		if err != nil {
+			fmt.Println("Error sending email:", err)
+			return
+		}
+	}
+	evicted := cache.Add(emailMsg.OrderID, empty{})
+	if evicted {
+		log.Printf("Email with Order-id:%s may be duplicated", emailMsg.OrderID)
 		return
 	}
 }
