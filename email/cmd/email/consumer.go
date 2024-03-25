@@ -1,15 +1,18 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
-	"sync"
 	"os"
-	"github.com/IBM/sarama"
-	"github.com/vinay-winai/gomicro/internal/email"
-	"github.com/hashicorp/golang-lru/v2/expirable"
+	"strconv"
+	"sync"
 	"time"
+
+	"github.com/IBM/sarama"
+	"github.com/redis/go-redis/v9"
+	"github.com/vinay-winai/gomicro/internal/email"
 )
 
 const topic = "email"
@@ -21,11 +24,25 @@ type EmailMsg struct {
 	UserID  string `json:"user_id"`
 }
 
-type empty struct {}
+var cache *redis.Client
+var ctx = context.Background()
+var redisClientName = strconv.FormatInt(time.Now().UnixNano(), 10)
 
-var cache = expirable.NewLRU[string,empty](1000, nil, time.Millisecond*1000)
+func initRedis(ctx context.Context) {
+	client := redis.NewClient(&redis.Options{
+		Addr:     os.Getenv("REDIS_HOST"),
+		Password: os.Getenv("REDIS_PASSWORD"),
+		ClientName: redisClientName,
+	})
+	_, err := client.Ping(ctx).Result()
+	if err != nil {
+		log.Fatal("Error connecting to Redis:", err)
+	}
+	cache = client
+}
 
 func main() {
+	initRedis(ctx)
 	sarama.Logger = log.New(os.Stdout, "[sarama]", log.LstdFlags)
 	done := make(chan struct{})
 	config := sarama.NewConfig()
@@ -40,7 +57,7 @@ func main() {
 			log.Println(err)
 		}
 	}()
-	
+
 	partitions, err := consumer.Partitions(topic)
 	if err != nil {
 		log.Fatal(err)
@@ -83,18 +100,29 @@ func handleMessage(msg *sarama.ConsumerMessage) {
 		fmt.Println("Error unmarshalling message:", err)
 		return
 	}
-	// once
-	if _, ok := cache.Get(emailMsg.OrderID); !ok {
-		log.Printf("Sending email with Order-id:%s", emailMsg.OrderID)
-		err = email.Send(emailMsg.UserID, emailMsg.OrderID)
-		if err != nil {
-			fmt.Println("Error sending email:", err)
-			return
-		}
-	}
-	evicted := cache.Add(emailMsg.OrderID, empty{})
-	if evicted {
-		log.Printf("Email with Order-id:%s may be duplicated", emailMsg.OrderID)
+	cacheKey := redisClientName + emailMsg.OrderID
+	exists, err := cache.SIsMember(ctx, cacheKey, true).Result()
+	if err != nil {
+		log.Println("Error sending email due to redis:", err)
 		return
+	}
+	// once
+	if !exists {
+		cache.SAdd(ctx, cacheKey, true)
+		cache.ExpireNX(ctx, cacheKey, time.Second)
+		log.Println("Added orderID to redis-cache")
+		// clientName := cache.ClientGetName(ctx).FullName() and .Name() always return "client".
+		// maybe issue with the package.
+		emailKeys := cache.Keys(ctx, "*"+emailMsg.OrderID).Val()
+		log.Println("emailKeys:", emailKeys)
+		if len(emailKeys) > 1{
+			cache.Del(ctx,emailKeys[len(emailKeys)-1])
+			log.Println("key popped")
+		}
+		log.Println(cache.Keys(ctx, cacheKey).Val())
+		if len(cache.Keys(ctx,cacheKey).Val()) != 0 {
+			email.Send(emailMsg.UserID, emailMsg.OrderID)
+			log.Printf("Sending email with Order-id:%s", emailMsg.OrderID)
+		}
 	}
 }
