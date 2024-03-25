@@ -100,29 +100,17 @@ func handleMessage(msg *sarama.ConsumerMessage) {
 		fmt.Println("Error unmarshalling message:", err)
 		return
 	}
-	cacheKey := redisClientName + emailMsg.OrderID
-	exists, err := cache.SIsMember(ctx, cacheKey, true).Result()
-	if err != nil {
-		log.Println("Error sending email due to redis:", err)
+	cacheKey := strconv.Itoa(time.Now().Second())
+	// clientName := cache.ClientGetName(ctx).FullName() and .Name() always return "client".
+	// maybe issue with the package.
+	success,_ := cache.HSetNX(ctx, cacheKey, emailMsg.OrderID, redisClientName).Result()
+	cache.ExpireNX(ctx, cacheKey, time.Second)
+	// once
+	if !success {
+		log.Println("OrderID already exists in redis-cache")
 		return
 	}
-	// once
-	if !exists {
-		cache.SAdd(ctx, cacheKey, true)
-		cache.ExpireNX(ctx, cacheKey, time.Second)
-		log.Println("Added orderID to redis-cache")
-		// clientName := cache.ClientGetName(ctx).FullName() and .Name() always return "client".
-		// maybe issue with the package.
-		emailKeys := cache.Keys(ctx, "*"+emailMsg.OrderID).Val()
-		log.Println("emailKeys:", emailKeys)
-		if len(emailKeys) > 1{
-			cache.Del(ctx,emailKeys[len(emailKeys)-1])
-			log.Println("key popped")
-		}
-		log.Println(cache.Keys(ctx, cacheKey).Val())
-		if len(cache.Keys(ctx,cacheKey).Val()) != 0 {
-			email.Send(emailMsg.UserID, emailMsg.OrderID)
-			log.Printf("Sending email with Order-id:%s", emailMsg.OrderID)
-		}
-	}
+	log.Println("Added orderID to redis-cache")
+	email.Send(emailMsg.UserID, emailMsg.OrderID)
+	log.Printf("Sent email with Order-id:%s", emailMsg.OrderID)
 }
